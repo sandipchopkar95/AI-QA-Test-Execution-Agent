@@ -1,135 +1,130 @@
 # AI QA Test Execution Agent
 
-Excel/plain-English test cases -> AI execution planner -> Playwright MCP -> browser -> PASS/FAIL + evidence.
+Read QA test cases from an Excel workbook, then either run them with an OpenAI model and a Playwright MCP-controlled browser or generate an offline demo report.
 
-## What this framework does
+## What it does
 
-You do NOT write Playwright test code for individual test cases.
+- Reads the first worksheet of an `.xlsx` workbook.
+- Groups step rows into test cases and sorts steps by step number.
+- In live mode, sends each step and expected result to the configured OpenAI model. The model can use the tools provided by the Playwright MCP server to interact with the browser.
+- Writes timestamped JSON and HTML reports under `reports/`.
+- In demo mode, shows the cases and steps and writes reports marked `DEMO`. Demo mode does not call OpenAI, start a browser, or verify expected results.
 
-1. Put your test cases in Excel.
-2. Run the agent.
-3. The AI reads each plain-English step and expected result.
-4. The AI uses the official Microsoft `@playwright/mcp` server to operate the browser.
-5. The framework captures step results, screenshots when available, execution notes, and a JSON/HTML report.
-6. AI-generated execution plans are stored under `generated/` for debugging/audit; they are not required in the Excel file.
+This project does not generate or execute a separate Playwright test file for each Excel row. Live execution depends on the model, the browser tools, and the target application's availability and state.
 
-The framework is intentionally hybrid:
-- Excel = test source of truth
-- OpenAI = reasoning/planning + expected-result interpretation
-- Playwright MCP = browser control
-- This framework = orchestration, test-case management, evidence and reporting
+## Requirements
 
-## Prerequisites
+- Node.js 20 or later
+- npm
+- For live execution: a valid OpenAI API key, network access, and an accessible application under test
+- For live browser execution: Playwright MCP and a supported browser. The default MCP package is invoked through `npx`.
 
-- Node.js 20+
-- An OpenAI API key
-- Network access to your QA environment
-- The official Microsoft Playwright MCP package is installed on demand through `npx`
-
-Playwright MCP documentation:
-https://playwright.dev/mcp
-
-## Setup
+## Install and configure
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Fill `.env`.
+For live execution, edit `.env` and set:
 
-Then:
-
-```bash
-npm run run:sample
+```dotenv
+OPENAI_API_KEY=your_valid_openai_api_key
+OPENAI_MODEL=gpt-5.6
+BASE_URL=https://your-qa-environment.example.com
 ```
 
-To demonstrate Excel parsing and report generation without an OpenAI key or browser:
+Do not commit `.env` or put passwords in the workbook. `User Role` is passed to the model as test context; this starter project does not implement role-specific login or credential profiles. Ensure the target application and any required test data or authenticated browser state are available to the run.
+
+## Run the sample workbook
+
+### Offline demo (no API key or browser)
 
 ```bash
 npm run run:sample:demo
 ```
 
-Demo reports label every case and step as `DEMO`; they are illustrative only and do not represent verified test results.
+The command reads `test-data/sample-test-cases.xlsx`, prints each case and step, and creates JSON and HTML reports. Every case and step has status `DEMO`; these are not test results and must not be interpreted as PASS or FAIL.
 
-For your own Excel:
+### Live execution
+
+```bash
+npm run run:sample
+```
+
+Live execution requires a valid OpenAI API key. It starts the configured Playwright MCP server and attempts to execute the sample against the application described in the workbook and `BASE_URL`.
+
+## Run a workbook or selected case
 
 ```bash
 npm run run -- --file "/absolute/path/to/test-cases.xlsx"
 ```
 
-Optional:
+To select one exact test case ID:
 
 ```bash
-npm run run -- --file test-data/sample-test-cases.xlsx --tc TC001
+npm run run -- --file "/absolute/path/to/test-cases.xlsx" --tc SEN2-27129_001
 ```
 
-## Excel format
+Add `--demo` to either command to generate an offline demo report instead of calling OpenAI or starting the browser:
 
-The parser supports a practical row-per-step structure:
+```bash
+npm run run -- --file "/absolute/path/to/test-cases.xlsx" --tc SEN2-27129_001 --demo
+```
+
+## Excel workbook format
+
+The reader uses the first worksheet and expects headers in row 1. It requires columns for a case ID, a test step, and an expected result. Header matching ignores case, surrounding whitespace, and differences between underscores, hyphens, and spaces. Supported names include:
+
+| Data | Recognized header examples |
+|---|---|
+| Test case ID | `Test Case ID`, `TC ID`, `Test Case`, `ID` |
+| Scenario | `Test Scenario`, `Scenario`, `Title` |
+| Step number | `Step No`, `Step Number`, `Step #` |
+| Test step | `Test Step`, `Steps`, `Action`, `Instruction`, `Instructions (test step)` |
+| Expected result | `Expected Result`, `Expected`, `Expected Outcome`, `Expected results (test step)` |
+| Test data | `Test Data`, `Data` |
+| User role | `User Role`, `Role`, `Persona` |
+
+The provided workbook follows a QA-export, row-per-step layout. Its relevant columns are:
+
+| ID | Scenario | Instructions (test step) | Expected results (test step) | User Role |
+|---|---|---|---|---|
+| `SEN2-27129_001` | Verify Apartments section appears on Resident Overview when resident has multiple apartments | Navigate to the Resident Overview page for the resident with multiple apartments. | The Resident Overview page loads and displays an 'Apartments' section with heading 'Apartments'. | `CLIENT REP` |
+| *(blank; continues previous case)* | *(blank)* | Observe the section heading in the Apartments section. | The heading displays exactly 'Apartments'. | *(blank)* |
+| `SEN2-27129_002` | Verify no plus icon for adding apartment in Apartments section | Inspect the top-right corner of the Apartments section for a plus icon. | No plus icon is present. | `CLIENT REP` |
+
+When an `ID` cell is blank, the row is grouped under the most recent non-empty ID. Rows without a current or inherited ID, or without test-step text, are skipped. If a step number is absent or not numeric, its position in that case is used. Steps are sorted by step number before execution. Other workbook columns are retained as row metadata in the parsed case data, but are not automatically treated as execution instructions.
+
+You can also use the simpler format below:
 
 | Test Case ID | Test Scenario | Step No | Test Step | Expected Result | Test Data | User Role |
 |---|---|---:|---|---|---|---|
-| TC001 | Verify resident preferences | 1 | Login to PSP as Client Admin | Dashboard is displayed | | CLIENT_ADMIN |
-| TC001 | Verify resident preferences | 2 | Navigate to Residences | Residences page is displayed | | CLIENT_ADMIN |
-| TC001 | Verify resident preferences | 3 | Search for resident "John Smith" | John Smith is displayed | John Smith | CLIENT_ADMIN |
+| `TC001` | Verify resident preferences | 1 | Navigate to Residences | Residences page is displayed | | `CLIENT_ADMIN` |
+| `TC001` | Verify resident preferences | 2 | Search for resident "John Smith" | John Smith is displayed | John Smith | `CLIENT_ADMIN` |
 
-Header names are normalized, so common variants such as `TC ID`, `Test Case`, `Steps`, `Expected`, etc. are accepted.
-QA exports using `ID`, `Scenario`, `Instructions (test step)`, and `Expected results (test step)` are also supported. If a continuation row leaves `ID` blank, it is grouped under the most recent non-empty ID.
+## Configuration
 
-## How execution works
+The available environment settings are listed in `.env.example`.
 
-For every test case:
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | Required for live mode; not needed for `--demo`. |
+| `OPENAI_MODEL` | OpenAI model used for live execution. |
+| `BASE_URL` | Application URL provided to the model as context. |
+| `PLAYWRIGHT_MCP_COMMAND` | MCP launch command; defaults to `npx`. |
+| `PLAYWRIGHT_MCP_PACKAGE` | MCP package; defaults to `@playwright/mcp@latest`. |
+| `PLAYWRIGHT_MCP_HEADLESS` | Set to `true` to request headless browser mode. |
+| `PLAYWRIGHT_MCP_BROWSER` | Browser name; defaults to `chromium`. |
+| `MAX_AGENT_TURNS` | Maximum model/tool-loop turns per step. |
+| `MAX_RECOVERY_ATTEMPTS` | Reserved execution setting; recovery attempts are not currently implemented. |
+| `STEP_TIMEOUT_MS` | Reserved execution setting; per-step timeout is not currently enforced. |
 
-```text
-Excel
-  |
-  v
-Test Case Parser
-  |
-  v
-AI Execution Planner
-  |
-  v
-MCP Agent Loop
-  |
-  v
-@playwright/mcp
-  |
-  v
-Browser
-  |
-  +--> step outcome
-  +--> recovery attempt
-  +--> evidence
-  |
-  v
-Report
-```
+The username and password placeholders in `.env.example` are not currently wired into browser login. Do not rely on them to authenticate a run.
 
-The agent is given the test step and expected result plus the current browser state. It can call the Playwright MCP tools that are exposed by the local MCP server.
+## Reports and generated files
 
-## Important design decision
-
-Do NOT ask the model to return arbitrary Playwright code and execute it blindly.
-
-Instead, the model uses MCP tools such as navigation, snapshot, click, type, form fill, assertions/checks and screenshots. This keeps the browser control structured and auditable.
-
-The `generated/` folder stores the model's internal execution plan/notes so you can inspect why an action was chosen.
-
-## Credentials
-
-For a first local proof of concept, environment variables are supported.
-
-For production:
-- use your CI secret variables or a secrets manager;
-- never commit `.env`;
-- never put passwords in the Excel sheet;
-- use role aliases such as `CLIENT_ADMIN`, `CLIENT_VIEWER`, `RESIDENT`.
-
-## Reports
-
-After execution:
+Each run writes:
 
 ```text
 reports/
@@ -137,54 +132,37 @@ reports/
   execution-<timestamp>.html
 ```
 
-The JSON report is machine-readable. The HTML report is human-readable.
+Live reports contain model-reported step evidence and `PASS`/`FAIL` statuses. They do not guarantee that screenshots or other evidence artifacts were captured. Demo reports use `DEMO` statuses and explicitly state that execution and verification did not occur.
 
-## Current MVP capabilities
+Live execution also writes the parsed test-case context under:
 
-- Excel test-case ingestion
-- Multiple test cases in one workbook
-- Plain-English steps
-- Expected-result interpretation
-- Role/test-data context
-- OpenAI-driven execution loop
-- Local Playwright MCP server
-- Browser execution without authoring test code
-- Step-level PASS/FAIL
-- Agent recovery turns
-- JSON + HTML reporting
-- Internal AI execution plan/audit files
+```text
+generated/<test-case-id>/execution-context.json
+```
 
-## Recommended next upgrades
-
-1. Add your existing 21-column QA Excel template mapping.
-2. Add login/credential profiles per role.
-3. Add Jira integration for failed cases.
-4. Add API validation tools for UI + API tests.
-5. Add persistent browser/storage state for SSO.
-6. Add parallel workers after the single-worker flow is stable.
-7. Add a web dashboard.
-8. Add a "Generate/Execute/Review" approval mode.
+This is input context for the run, not an AI-generated execution plan.
 
 ## Troubleshooting
 
-### Browser does not open
-Run:
+### Missing or invalid OpenAI API key
+
+Live mode requires a valid key. For parsing and report-format demonstrations without a key, use:
+
 ```bash
-npx @playwright/mcp@latest
+npm run run:sample:demo
 ```
-by itself once and verify Node/browser setup.
 
-### AI does not act
-Check:
-- `OPENAI_API_KEY`
-- `BASE_URL`
-- network access
-- MCP server startup
-- model availability for your account
+### Workbook header error
 
-### Test fails on a locator
-The agent can inspect the current accessibility snapshot and attempt recovery. Keep recovery bounded; do not allow unlimited retries.
+Check that the first worksheet has its header row in row 1 and includes an ID, test-step, and expected-result column using one of the recognized names above.
 
-## Disclaimer
+### Browser or application is unavailable
 
-This is a production-oriented starter framework, not a drop-in guarantee for every application's authentication, CAPTCHA, SSO, iframe, native-dialog, or custom-widget behavior. Those application-specific capabilities should be added as controlled tools/configuration rather than hardcoded into every test.
+Check the MCP command/package and browser settings, network access, and that the application under test is reachable. The model receives `BASE_URL` as context; the project does not automatically configure application-specific login or seed test data.
+
+## Limitations
+
+- Live execution is model-driven and depends on the MCP tools and browser state available at runtime.
+- The sample workbook describes application-specific Resident Overview scenarios; it does not provision the application, residents, apartments, or other test data.
+- Role names and other unrecognized workbook columns are context/metadata only unless the execution code is extended to use them.
+- Demo output is for demonstrating workbook ingestion and report generation only; it is not evidence that any test passed.
